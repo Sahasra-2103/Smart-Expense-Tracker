@@ -139,13 +139,23 @@ const analyzeInvoice = async (filePath) => {
             };
           } else {
             console.warn('Could not extract JSON from Groq content:', content);
+            if (isVercel) {
+              throw new Error(`Failed to parse invoice: Groq returned invalid format. Output was: ${content}`);
+            }
           }
         } else {
           const errText = await response.text().catch(() => '');
-          console.error('Groq Vision API returned error response:', errText);
+          const errMsg = `Groq Vision API returned status ${response.status}: ${errText}`;
+          console.error(errMsg);
+          if (isVercel) {
+            throw new Error(errMsg);
+          }
         }
       } catch (err) {
         console.warn('Groq Vision fast path failed:', err.message);
+        if (isVercel) {
+          throw new Error(`Groq Vision API request failed: ${err.message}`);
+        }
       }
     } else {
       console.log('Skipping Groq Vision: file extension is not an image:', ext);
