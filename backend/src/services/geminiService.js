@@ -22,14 +22,18 @@ const parseInvoiceWithGrok = async (invoiceText) => {
 
   const prompt = `Extract the following fields from this invoice text as a JSON object with keys: merchant, amount, date, category, description. Return only valid JSON.\n\nInvoice text:\n${invoiceText}`;
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const isGroq = grokApiKey.startsWith('gsk_');
+  const apiUrl = isGroq ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
+  const modelToUse = isGroq ? 'llama-3.3-70b-versatile' : grokModel;
+
+  const response = await fetch(apiUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${grokApiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: grokModel,
+      model: modelToUse,
       messages: [
         { role: 'system', content: 'You are an invoice parser. Extract merchant, amount, date, category, and description from raw invoice text.' },
         { role: 'user', content: prompt },
@@ -40,7 +44,7 @@ const parseInvoiceWithGrok = async (invoiceText) => {
   });
 
   if (!response.ok) {
-    throw new Error(`Grok request failed: ${response.status} ${response.statusText}`);
+    throw new Error(`Groq/Grok request failed: ${response.status} ${response.statusText}`);
   }
 
   const data = await response.json();
@@ -67,12 +71,70 @@ const analyzeInvoice = async (filePath) => {
   if (apiKey) {
     try {
       // Placeholder for real Gemini Vision call.
-      // You should replace this block with the official @google/generative-ai client calls
-      // following Google's SDK docs and provide API key via ADC or environment.
-      // For now, fall through to OCR after logging intent.
       console.log('Gemini API key present — implement real SDK call here');
     } catch (err) {
       console.warn('Gemini call failed, falling back to OCR', err.message);
+    }
+  }
+
+  const isVercel = process.env.VERCEL === '1' || process.env.VERCEL;
+  
+  // Fast path for Groq Vision API on Vercel to bypass slow Tesseract OCR
+  if (grokApiKey && grokApiKey.startsWith('gsk_')) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.png' || ext === '.jpg' || ext === '.jpeg') {
+      try {
+        const base64Image = fs.readFileSync(filePath, { encoding: 'base64' });
+        const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+        const prompt = 'Extract the following fields from this invoice as a JSON object with keys: merchant, amount, date, category, description. Return only valid JSON. If you cannot find a value, use null.';
+        
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${grokApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'llama-3.2-11b-vision-preview',
+            messages: [
+              { 
+                role: 'user', 
+                content: [
+                  { type: 'text', text: prompt },
+                  { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } }
+                ]
+              }
+            ],
+            temperature: 0.0,
+            max_tokens: 500,
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const content = data.choices?.[0]?.message?.content || '';
+          const parsed = extractJsonFromText(content);
+          if (parsed) {
+            const amountValue = parsed.amount || parsed.total || parsed.totalAmount || parsed['total amount'];
+            const amount = amountValue ? parseFloat(String(amountValue).replace(/[^0-9.-]+/g, '')) : null;
+            const dateValue = parsed.date || parsed.invoiceDate || parsed.transactionDate;
+            const invoiceDate = dateValue ? new Date(String(dateValue)) : null;
+            
+            return {
+              title: parsed.merchant || parsed.vendor || parsed.supplier || path.basename(filePath),
+              amount: Number.isFinite(amount) ? amount : 0,
+              merchant: parsed.merchant || parsed.vendor || parsed.supplier || '',
+              invoiceDate: invoiceDate instanceof Date && !isNaN(invoiceDate.getTime()) ? invoiceDate : new Date(),
+              paymentMethod: '',
+              description: parsed.description || '',
+              category: parsed.category || 'Other',
+              extractedText: 'Parsed via Groq Vision (OCR bypassed)',
+            };
+          }
+        }
+      } catch (err) {
+        console.warn('Groq Vision fast path failed, falling back to OCR:', err.message);
+      }
     }
   }
 
@@ -100,7 +162,6 @@ const analyzeInvoice = async (filePath) => {
       }
     }
 
-    const isVercel = process.env.VERCEL === '1' || process.env.VERCEL;
     const { data: { text } } = await Tesseract.recognize(ocrFile, 'eng', { 
       logger: m => {},
       cachePath: isVercel ? '/tmp' : '.'
