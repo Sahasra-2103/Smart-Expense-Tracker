@@ -113,10 +113,36 @@ const categoryKeywords = {
 
 const validCategories = new Set([...Object.keys(categoryKeywords), 'Other']);
 
+const categoryAliases = {
+  restaurant: 'Food',
+  dining: 'Food',
+  groceries: 'Food',
+  grocery: 'Food',
+  transport: 'Travel',
+  transportation: 'Travel',
+  commute: 'Travel',
+  taxi: 'Travel',
+  rideshare: 'Travel',
+  ride: 'Travel',
+  fuel: 'Travel',
+  gas: 'Travel',
+  utilities: 'Bills',
+  utility: 'Bills',
+  bill: 'Bills',
+  medical: 'Health',
+  healthcare: 'Health',
+  pharmacy: 'Health',
+  entertainment: 'Entertainment',
+  education: 'Education',
+  shopping: 'Shopping',
+};
+
 const normalizeCategory = (category) => {
   if (!category) return null;
   const normalized = String(category).trim().toLowerCase();
-  return [...validCategories].find((validCategory) => validCategory.toLowerCase() === normalized) || null;
+  return [...validCategories].find((validCategory) => validCategory.toLowerCase() === normalized)
+    || categoryAliases[normalized]
+    || null;
 };
 
 const inferCategoryFromText = (text) => {
