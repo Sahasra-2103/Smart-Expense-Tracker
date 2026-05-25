@@ -78,10 +78,90 @@ const extractJsonFromText = (content) => {
   )) || parsedObjects[0];
 };
 
+const categoryKeywords = {
+  Food: [
+    'restaurant', 'cafe', 'pizza', 'food', 'dinner', 'lunch', 'canteen', 'biryani', 'curry',
+    'meal', 'burger', 'sandwich', 'coffee', 'chai', 'snacks', 'breakfast', 'dessert',
+    'murgh', 'paneer', 'papad', 'platter', 'juice', 'beer', 'whisky', 'tandoori', 'kadhai',
+    'veg', 'non veg', 'water bottle', 'bottled water', 'aerated water', 'bar', 'kitchen',
+  ],
+  Travel: [
+    'uber', 'ola', 'taxi', 'lyft', 'flight', 'train', 'bus', 'travel', 'airbnb', 'booking',
+    'ticket', 'hotel', 'rail', 'metro', 'cab', 'fare', 'bus fare', 'flight ticket', 'boarding pass',
+  ],
+  Shopping: [
+    'amazon', 'ebay', 'flipkart', 'myntra', 'order', 'purchase', 'shop', 'shopping', 'mall',
+    'store', 'cart', 'payment for', 'shipment', 'delivery', 'invoice',
+  ],
+  Bills: [
+    'electricity', 'water bill', 'gas bill', 'utility', 'utility bill', 'payment due', 'bill payment',
+    'mobile recharge', 'phone bill', 'broadband', 'internet', 'subscription', 'dth', 'electric',
+    'gas', 'tax', 'bill', 'due amount', 'statement',
+  ],
+  Entertainment: [
+    'movie', 'netflix', 'spotify', 'ticket', 'concert', 'subscription', 'play', 'event', 'show',
+  ],
+  Health: [
+    'pharmacy', 'clinic', 'hospital', 'doctor', 'medicine', 'medicines', 'health', 'lab', 'diagnostic',
+    'doctor fee', 'consultation', 'medical', 'ambulance',
+  ],
+  Education: [
+    'school', 'tuition', 'course', 'university', 'college', 'training', 'exam fee', 'coaching',
+    'certificate', 'library', 'education',
+  ],
+};
+
+const validCategories = new Set([...Object.keys(categoryKeywords), 'Other']);
+
+const inferCategoryFromText = (text) => {
+  const txt = String(text || '').toLowerCase();
+  if (!txt.trim()) return 'Other';
+
+  const scores = {};
+  Object.entries(categoryKeywords).forEach(([categoryName, keywords]) => {
+    scores[categoryName] = 0;
+    keywords.forEach((keyword) => {
+      const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'gi');
+      const matches = txt.match(regex);
+      scores[categoryName] += matches ? matches.length : 0;
+    });
+  });
+
+  const bestCategory = Object.entries(scores).reduce((best, [name, score]) => {
+    if (score > best.score) return { name, score };
+    return best;
+  }, { name: 'Other', score: 0 });
+
+  if (bestCategory.score > 0) return bestCategory.name;
+  if (/(bill|due|payment)/i.test(txt)) return 'Bills';
+  if (/(restaurant|cafe|food|meal|dinner|lunch|breakfast|tandoori|paneer|platter|juice|beer|whisky)/i.test(txt)) return 'Food';
+  if (/(taxi|uber|ola|flight|train|bus|hotel|booking|cab)/i.test(txt)) return 'Travel';
+
+  return 'Other';
+};
+
+const inferCategoryFromParsedInvoice = (parsed) => {
+  if (!parsed || typeof parsed !== 'object') return 'Other';
+  if (parsed.category && validCategories.has(parsed.category)) return parsed.category;
+
+  const itemText = Array.isArray(parsed.items)
+    ? parsed.items.map((item) => [item.description, item.name, item.category].filter(Boolean).join(' ')).join(' ')
+    : '';
+
+  return inferCategoryFromText([
+    parsed.category,
+    parsed.description,
+    parsed.merchant,
+    parsed.vendor,
+    parsed.supplier,
+    itemText,
+  ].filter(Boolean).join(' '));
+};
+
 const parseInvoiceWithGrok = async (invoiceText) => {
   if (!grokApiKey || !invoiceText) return null;
 
-  const prompt = `Extract the following fields from this invoice text as one JSON object with keys: merchant, amount, date, category, description. Return only the JSON object. Do not include Markdown, code fences, explanations, extra JSON objects, or item-level details.\n\nInvoice text:\n${invoiceText}`;
+  const prompt = `Extract the following fields from this invoice text as one JSON object with keys: merchant, amount, date, category, description. Category must be one of: Food, Travel, Shopping, Bills, Entertainment, Health, Education, Other. Return only the JSON object. Do not include Markdown, code fences, explanations, extra JSON objects, or item-level details.\n\nInvoice text:\n${invoiceText}`;
 
   const isGroq = grokApiKey.startsWith('gsk_');
   const apiUrl = isGroq ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
@@ -122,7 +202,7 @@ const parseInvoiceWithGrok = async (invoiceText) => {
     merchant: parsed.merchant || parsed.vendor || parsed.supplier,
     amount: Number.isFinite(amount) ? amount : null,
     invoiceDate: invoiceDate instanceof Date && !isNaN(invoiceDate.getTime()) ? invoiceDate : null,
-    category: parsed.category,
+    category: inferCategoryFromParsedInvoice(parsed),
     description: parsed.description,
   };
 };
@@ -152,7 +232,7 @@ const analyzeInvoice = async (filePath) => {
       try {
         const base64Image = fs.readFileSync(filePath, { encoding: 'base64' });
         const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
-        const prompt = 'Extract the following fields from this invoice as one JSON object with keys: merchant, amount, date, category, description. Return only the JSON object. Do not include Markdown, code fences, explanations, extra JSON objects, or item-level details. If you cannot find a value, use null.';
+        const prompt = 'Extract the following fields from this invoice as one JSON object with keys: merchant, amount, date, category, description. Category must be one of: Food, Travel, Shopping, Bills, Entertainment, Health, Education, Other. Return only the JSON object. Do not include Markdown, code fences, explanations, extra JSON objects, or item-level details. If you cannot find a value, use null, except category should be your best matching category.';
         
         console.log('Sending request to Groq Vision API...', { model: grokVisionModel });
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -199,7 +279,7 @@ const analyzeInvoice = async (filePath) => {
               invoiceDate: invoiceDate instanceof Date && !isNaN(invoiceDate.getTime()) ? invoiceDate : new Date(),
               paymentMethod: '',
               description: parsed.description || '',
-              category: parsed.category || 'Other',
+              category: inferCategoryFromParsedInvoice(parsed),
               extractedText: 'Parsed via Groq Vision (OCR bypassed)',
             };
           } else {
@@ -285,23 +365,7 @@ const analyzeInvoice = async (filePath) => {
     const num = parseFloat(raw);
     if (!isNaN(num) && num > 0 && num < 10000000) amountMatches.push(num);
   }
-  const amount = amountMatches.length ? Math.max(...amountMatches) : 0;
-
-  // Send tracking event to LangSmith if enabled
-  try {
-    const eventPayload = {
-      file: path.basename(filePath),
-      usedGemini: !!apiKey,
-      ocrTextLength: extractedText.length,
-      amountCandidates: amountMatches,
-      chosenAmount: amount,
-      categoryScores: scores,
-      chosenCategory: category,
-    };
-    langsmith.trackEvent('analyzeInvoice', eventPayload);
-  } catch (e) {
-    // ignore
-  }
+  let amount = amountMatches.length ? Math.max(...amountMatches) : 0;
 
   const dateMatch = extractedText.match(/(\d{4}-\d{2}-\d{2})|(\d{2}\/\d{2}\/\d{4})|(\d{1,2} \w+ \d{4})/);
   let invoiceDate = dateMatch ? new Date(dateMatch[0]) : new Date();
@@ -317,61 +381,7 @@ const analyzeInvoice = async (filePath) => {
     merchant = line; break;
   }
 
-  // Category detection with keyword scoring to avoid defaulting to Other.
-  const txt = extractedText.toLowerCase();
-  const categoryKeywords = {
-    Food: [
-      'restaurant', 'cafe', 'pizza', 'food', 'dinner', 'lunch', 'canteen', 'biryani', 'curry',
-      'meal', 'burger', 'sandwich', 'coffee', 'chai', 'snacks', 'breakfast', 'dinner', 'dessert',
-    ],
-    Travel: [
-      'uber', 'ola', 'taxi', 'lyft', 'flight', 'train', 'bus', 'travel', 'airbnb', 'booking',
-      'ticket', 'hotel', 'rail', 'metro', 'cab', 'fare', 'bus fare', 'flight ticket', 'boarding pass',
-    ],
-    Shopping: [
-      'amazon', 'ebay', 'flipkart', 'myntra', 'order', 'purchase', 'shop', 'shopping', 'mall',
-      'store', 'cart', 'payment for', 'shipment', 'delivery', 'invoice',
-    ],
-    Bills: [
-      'electricity', 'water bill', 'gas bill', 'utility', 'utility bill', 'payment due', 'bill payment',
-      'mobile recharge', 'phone bill', 'broadband', 'internet', 'subscription', 'dth', 'electric',
-      'gas', 'tax', 'bill', 'due amount', 'statement',
-    ],
-    Entertainment: [
-      'movie', 'netflix', 'spotify', 'ticket', 'concert', 'subscription', 'play', 'event', 'show',
-    ],
-    Health: [
-      'pharmacy', 'clinic', 'hospital', 'doctor', 'medicine', 'medicines', 'health', 'lab', 'diagnostic',
-      'doctor fee', 'consultation', 'medical', 'ambulance',
-    ],
-    Education: [
-      'school', 'tuition', 'course', 'university', 'college', 'training', 'exam fee', 'coaching',
-      'certificate', 'library', 'education',
-    ],
-  };
-  const scores = {};
-  Object.entries(categoryKeywords).forEach(([categoryName, keywords]) => {
-    scores[categoryName] = 0;
-    keywords.forEach((keyword) => {
-      const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\b`, 'gi');
-      const matches = txt.match(regex);
-      scores[categoryName] += matches ? matches.length : 0;
-    });
-  });
-
-  let category = 'Other';
-  const bestCategory = Object.entries(scores).reduce((best, [name, score]) => {
-    if (score > best.score) return { name, score };
-    return best;
-  }, { name: 'Other', score: 0 });
-  if (bestCategory.score > 0) category = bestCategory.name;
-
-  // If no strong keyword was found, look for explicit bill/food markers.
-  if (category === 'Other') {
-    if (/(bill|due|payment)/i.test(txt)) category = 'Bills';
-    else if (/(restaurant|cafe|food|meal|dinner|lunch|breakfast)/i.test(txt)) category = 'Food';
-    else if (/(taxi|uber|ola|flight|train|bus|hotel|booking|cab)/i.test(txt)) category = 'Travel';
-  }
+  let category = inferCategoryFromText(extractedText);
 
   if (grokApiKey && extractedText) {
     try {
@@ -388,6 +398,20 @@ const analyzeInvoice = async (filePath) => {
     }
   }
 
+  // Send tracking event to LangSmith if enabled
+  try {
+    langsmith.trackEvent('analyzeInvoice', {
+      file: path.basename(filePath),
+      usedGemini: !!apiKey,
+      ocrTextLength: extractedText.length,
+      amountCandidates: amountMatches,
+      chosenAmount: amount,
+      chosenCategory: category,
+    });
+  } catch (e) {
+    // ignore
+  }
+
   return {
     title: merchant || path.basename(filePath),
     amount,
@@ -400,4 +424,4 @@ const analyzeInvoice = async (filePath) => {
   };
 };
 
-module.exports = { analyzeInvoice, extractJsonFromText };
+module.exports = { analyzeInvoice, extractJsonFromText, inferCategoryFromParsedInvoice, inferCategoryFromText };
