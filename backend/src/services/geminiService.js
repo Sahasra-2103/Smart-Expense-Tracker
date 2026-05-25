@@ -100,7 +100,11 @@ const analyzeInvoice = async (filePath) => {
       }
     }
 
-    const { data: { text } } = await Tesseract.recognize(ocrFile, 'eng', { logger: m => {} });
+    const isVercel = process.env.VERCEL === '1' || process.env.VERCEL;
+    const { data: { text } } = await Tesseract.recognize(ocrFile, 'eng', { 
+      logger: m => {},
+      cachePath: isVercel ? '/tmp' : '.'
+    });
     extractedText = text || '';
   } catch (ocrErr) {
     console.warn('Tesseract OCR failed:', ocrErr && ocrErr.message ? ocrErr.message : ocrErr);
