@@ -35,6 +35,18 @@ app.use(limiter);
 // Serve uploads
 app.use('/uploads', express.static(path.join(__dirname, '..', process.env.UPLOADS_DIR || 'uploads')));
 
+// Diagnostics Route
+app.get('/api/diagnose', (req, res) => {
+  const key = process.env.GROK_API_KEY || '';
+  res.json({
+    isVercel: !!(process.env.VERCEL === '1' || process.env.VERCEL),
+    hasGrokApiKey: !!key,
+    grokApiKeyLength: key.length,
+    grokApiKeyPrefix: key ? key.substring(0, 8) : 'none',
+    envKeys: Object.keys(process.env).filter(k => !k.includes('KEY') && !k.includes('PASSWORD') && !k.includes('SECRET') && !k.includes('URI')),
+  });
+});
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/expenses', expenseRoutes);
