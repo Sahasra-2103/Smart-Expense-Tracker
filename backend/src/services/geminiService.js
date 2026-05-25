@@ -113,6 +113,12 @@ const categoryKeywords = {
 
 const validCategories = new Set([...Object.keys(categoryKeywords), 'Other']);
 
+const normalizeCategory = (category) => {
+  if (!category) return null;
+  const normalized = String(category).trim().toLowerCase();
+  return [...validCategories].find((validCategory) => validCategory.toLowerCase() === normalized) || null;
+};
+
 const inferCategoryFromText = (text) => {
   const txt = String(text || '').toLowerCase();
   if (!txt.trim()) return 'Other';
@@ -142,7 +148,8 @@ const inferCategoryFromText = (text) => {
 
 const inferCategoryFromParsedInvoice = (parsed) => {
   if (!parsed || typeof parsed !== 'object') return 'Other';
-  if (parsed.category && validCategories.has(parsed.category)) return parsed.category;
+  const normalizedCategory = normalizeCategory(parsed.category);
+  if (normalizedCategory) return normalizedCategory;
 
   const itemText = Array.isArray(parsed.items)
     ? parsed.items.map((item) => [item.description, item.name, item.category].filter(Boolean).join(' ')).join(' ')
@@ -156,6 +163,16 @@ const inferCategoryFromParsedInvoice = (parsed) => {
     parsed.supplier,
     itemText,
   ].filter(Boolean).join(' '));
+};
+
+const inferCategoryFromInvoiceData = (parsed, fallbackText = '') => {
+  const parsedCategory = inferCategoryFromParsedInvoice(parsed);
+  if (parsedCategory !== 'Other') return parsedCategory;
+
+  const fallbackCategory = inferCategoryFromText(fallbackText);
+  if (fallbackCategory !== 'Other') return fallbackCategory;
+
+  return parsedCategory;
 };
 
 const parseInvoiceWithGrok = async (invoiceText) => {
@@ -202,7 +219,7 @@ const parseInvoiceWithGrok = async (invoiceText) => {
     merchant: parsed.merchant || parsed.vendor || parsed.supplier,
     amount: Number.isFinite(amount) ? amount : null,
     invoiceDate: invoiceDate instanceof Date && !isNaN(invoiceDate.getTime()) ? invoiceDate : null,
-    category: inferCategoryFromParsedInvoice(parsed),
+    category: inferCategoryFromInvoiceData(parsed, content),
     description: parsed.description,
   };
 };
@@ -279,8 +296,8 @@ const analyzeInvoice = async (filePath) => {
               invoiceDate: invoiceDate instanceof Date && !isNaN(invoiceDate.getTime()) ? invoiceDate : new Date(),
               paymentMethod: '',
               description: parsed.description || '',
-              category: inferCategoryFromParsedInvoice(parsed),
-              extractedText: 'Parsed via Groq Vision (OCR bypassed)',
+              category: inferCategoryFromInvoiceData(parsed, content),
+              extractedText: `Parsed via Groq Vision (OCR bypassed)\n${content.slice(0, 2000)}`,
             };
           } else {
             console.warn('Could not extract JSON from Groq content:', content);
@@ -424,4 +441,4 @@ const analyzeInvoice = async (filePath) => {
   };
 };
 
-module.exports = { analyzeInvoice, extractJsonFromText, inferCategoryFromParsedInvoice, inferCategoryFromText };
+module.exports = { analyzeInvoice, extractJsonFromText, inferCategoryFromParsedInvoice, inferCategoryFromText, inferCategoryFromInvoiceData };
