@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "build": "cd frontend && npm install && npm run build && rm -rf ../public && mv build ../public"
+  },
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@langchain/core": "^1.1.48",
