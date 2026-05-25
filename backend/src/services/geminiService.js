@@ -67,18 +67,23 @@ const parseInvoiceWithGrok = async (invoiceText) => {
 };
 
 const analyzeInvoice = async (filePath) => {
+  const isVercel = process.env.VERCEL === '1' || process.env.VERCEL;
+  console.log('analyzeInvoice starting:', {
+    filePath,
+    isVercel,
+    hasGrokApiKey: !!grokApiKey,
+    grokApiKeyPrefix: grokApiKey ? grokApiKey.substring(0, 8) : 'none',
+  });
+
   // If Gemini API key is configured, attempt to call it
   if (apiKey) {
     try {
-      // Placeholder for real Gemini Vision call.
       console.log('Gemini API key present — implement real SDK call here');
     } catch (err) {
       console.warn('Gemini call failed, falling back to OCR', err.message);
     }
   }
 
-  const isVercel = process.env.VERCEL === '1' || process.env.VERCEL;
-  
   // Fast path for Groq Vision API on Vercel to bypass slow Tesseract OCR
   if (grokApiKey && grokApiKey.startsWith('gsk_')) {
     const ext = path.extname(filePath).toLowerCase();
@@ -88,6 +93,7 @@ const analyzeInvoice = async (filePath) => {
         const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
         const prompt = 'Extract the following fields from this invoice as a JSON object with keys: merchant, amount, date, category, description. Return only valid JSON. If you cannot find a value, use null.';
         
+        console.log('Sending request to Groq Vision API...');
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: {
@@ -110,6 +116,7 @@ const analyzeInvoice = async (filePath) => {
           }),
         });
 
+        console.log('Groq Vision response status:', response.status, response.statusText);
         if (response.ok) {
           const data = await response.json();
           const content = data.choices?.[0]?.message?.content || '';
@@ -130,12 +137,27 @@ const analyzeInvoice = async (filePath) => {
               category: parsed.category || 'Other',
               extractedText: 'Parsed via Groq Vision (OCR bypassed)',
             };
+          } else {
+            console.warn('Could not extract JSON from Groq content:', content);
           }
+        } else {
+          const errText = await response.text().catch(() => '');
+          console.error('Groq Vision API returned error response:', errText);
         }
       } catch (err) {
-        console.warn('Groq Vision fast path failed, falling back to OCR:', err.message);
+        console.warn('Groq Vision fast path failed:', err.message);
       }
+    } else {
+      console.log('Skipping Groq Vision: file extension is not an image:', ext);
     }
+  } else {
+    console.log('Skipping Groq Vision: no GROK_API_KEY found or it does not start with gsk_');
+  }
+
+  // If on Vercel, block falling back to Tesseract OCR to prevent 10s Serverless Timeout
+  if (isVercel) {
+    console.error('OCR fallback blocked on Vercel to prevent Serverless Timeout');
+    throw new Error('Invoice processing failed: OCR fallback is not supported in the serverless environment. Please ensure you upload a PNG/JPEG image and GROK_API_KEY is configured correctly.');
   }
 
   // Attempt to re-encode image to reduce OCR errors (optional: requires `sharp`).
