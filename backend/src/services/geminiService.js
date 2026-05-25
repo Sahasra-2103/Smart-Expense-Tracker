@@ -1,10 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const Tesseract = require('tesseract.js');
-const { apiKey, model, grokApiKey, grokModel } = require('../config/gemini');
+const { apiKey, model, grokApiKey, grokModel, grokVisionModel } = require('../config/gemini');
 const langsmith = require('./langsmithService');
 
-// Note: This service can use Grok via GROK_API_KEY when present.
+// Note: This service can use Groq via GROQ_API_KEY when present.
 // It still falls back to Tesseract OCR + heuristics when AI parsing is unavailable.
 
 const extractJsonFromText = (content) => {
@@ -93,7 +93,7 @@ const analyzeInvoice = async (filePath) => {
         const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
         const prompt = 'Extract the following fields from this invoice as a JSON object with keys: merchant, amount, date, category, description. Return only valid JSON. If you cannot find a value, use null.';
         
-        console.log('Sending request to Groq Vision API...');
+        console.log('Sending request to Groq Vision API...', { model: grokVisionModel });
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: {
@@ -101,7 +101,7 @@ const analyzeInvoice = async (filePath) => {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'llama-3.2-11b-vision-preview',
+            model: grokVisionModel,
             messages: [
               { 
                 role: 'user', 
@@ -161,13 +161,13 @@ const analyzeInvoice = async (filePath) => {
       console.log('Skipping Groq Vision: file extension is not an image:', ext);
     }
   } else {
-    console.log('Skipping Groq Vision: no GROK_API_KEY found or it does not start with gsk_');
+    console.log('Skipping Groq Vision: no GROQ_API_KEY found or it does not start with gsk_');
   }
 
   // If on Vercel, block falling back to Tesseract OCR to prevent 10s Serverless Timeout
   if (isVercel) {
     console.error('OCR fallback blocked on Vercel to prevent Serverless Timeout');
-    throw new Error('Invoice processing failed: OCR fallback is not supported in the serverless environment. Please ensure you upload a PNG/JPEG image and GROK_API_KEY is configured correctly.');
+    throw new Error('Invoice processing failed: OCR fallback is not supported in the serverless environment. Please ensure you upload a PNG/JPEG image and GROQ_API_KEY is configured correctly.');
   }
 
   // Attempt to re-encode image to reduce OCR errors (optional: requires `sharp`).
