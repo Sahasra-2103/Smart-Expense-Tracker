@@ -3,6 +3,7 @@ const path = require('path');
 const { validationResult } = require('express-validator');
 const Expense = require('../models/Expense');
 const geminiService = require('../services/geminiService');
+const langsmith = require('../services/langsmithService');
 
 const uploadAndExtract = async (req, res, next) => {
   try {
@@ -25,6 +26,10 @@ const uploadAndExtract = async (req, res, next) => {
     };
 
     const expense = await Expense.create(expenseData);
+    // Track creation
+    try {
+      langsmith.trackEvent('expenseCreated', { id: expense._id, title: expense.title, amount: expense.amount, category: expense.category });
+    } catch (e) { /* ignore */ }
     res.status(201).json(expense);
   } catch (err) {
     next(err);
