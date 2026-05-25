@@ -7,20 +7,81 @@ const langsmith = require('./langsmithService');
 // Note: This service can use Groq via GROQ_API_KEY when present.
 // It still falls back to Tesseract OCR + heuristics when AI parsing is unavailable.
 
-const extractJsonFromText = (content) => {
-  const match = content.match(/\{[\s\S]*\}/m);
-  if (!match) return null;
+const parseJsonObject = (value) => {
   try {
-    return JSON.parse(match[0]);
+    const parsed = JSON.parse(value.trim());
+    return parsed && !Array.isArray(parsed) && typeof parsed === 'object' ? parsed : null;
   } catch (err) {
     return null;
   }
 };
 
+const findJsonObjects = (content) => {
+  const objects = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < content.length; i += 1) {
+    const char = content[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (char === '}' && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start !== -1) {
+        const parsed = parseJsonObject(content.slice(start, i + 1));
+        if (parsed) objects.push(parsed);
+        start = -1;
+      }
+    }
+  }
+
+  return objects;
+};
+
+const extractJsonFromText = (content) => {
+  if (!content || typeof content !== 'string') return null;
+
+  const candidates = [];
+  const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let block;
+  while ((block = codeBlockRegex.exec(content)) !== null) {
+    candidates.push(block[1]);
+  }
+  candidates.push(content);
+
+  const parsedObjects = candidates.flatMap((candidate) => {
+    const parsed = parseJsonObject(candidate);
+    return parsed ? [parsed] : findJsonObjects(candidate);
+  });
+
+  if (!parsedObjects.length) return null;
+
+  return parsedObjects.find((obj) => (
+    obj.amount || obj.total || obj.totalAmount || obj.merchant || obj.vendor || obj.supplier
+  )) || parsedObjects[0];
+};
+
 const parseInvoiceWithGrok = async (invoiceText) => {
   if (!grokApiKey || !invoiceText) return null;
 
-  const prompt = `Extract the following fields from this invoice text as a JSON object with keys: merchant, amount, date, category, description. Return only valid JSON.\n\nInvoice text:\n${invoiceText}`;
+  const prompt = `Extract the following fields from this invoice text as one JSON object with keys: merchant, amount, date, category, description. Return only the JSON object. Do not include Markdown, code fences, explanations, extra JSON objects, or item-level details.\n\nInvoice text:\n${invoiceText}`;
 
   const isGroq = grokApiKey.startsWith('gsk_');
   const apiUrl = isGroq ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
@@ -35,7 +96,7 @@ const parseInvoiceWithGrok = async (invoiceText) => {
     body: JSON.stringify({
       model: modelToUse,
       messages: [
-        { role: 'system', content: 'You are an invoice parser. Extract merchant, amount, date, category, and description from raw invoice text.' },
+        { role: 'system', content: 'You are an invoice parser. Return exactly one valid JSON object and no other text.' },
         { role: 'user', content: prompt },
       ],
       temperature: 0.0,
@@ -91,7 +152,7 @@ const analyzeInvoice = async (filePath) => {
       try {
         const base64Image = fs.readFileSync(filePath, { encoding: 'base64' });
         const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
-        const prompt = 'Extract the following fields from this invoice as a JSON object with keys: merchant, amount, date, category, description. Return only valid JSON. If you cannot find a value, use null.';
+        const prompt = 'Extract the following fields from this invoice as one JSON object with keys: merchant, amount, date, category, description. Return only the JSON object. Do not include Markdown, code fences, explanations, extra JSON objects, or item-level details. If you cannot find a value, use null.';
         
         console.log('Sending request to Groq Vision API...', { model: grokVisionModel });
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -103,6 +164,10 @@ const analyzeInvoice = async (filePath) => {
           body: JSON.stringify({
             model: grokVisionModel,
             messages: [
+              {
+                role: 'system',
+                content: 'You are an invoice parser. Return exactly one valid JSON object and no other text.'
+              },
               { 
                 role: 'user', 
                 content: [
@@ -335,4 +400,4 @@ const analyzeInvoice = async (filePath) => {
   };
 };
 
-module.exports = { analyzeInvoice };
+module.exports = { analyzeInvoice, extractJsonFromText };
